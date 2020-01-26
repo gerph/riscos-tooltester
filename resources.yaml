@@ -7,7 +7,7 @@ resources:
     path: $RO_NATIVE
 
 exports:
-  build/native-tooltester:
+  build/cross-tooltester:
     phases: native:install
     path: $ROTOOL_DIR
     files:
