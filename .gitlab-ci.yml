@@ -37,15 +37,15 @@ build-linux:
   <<: *common-cross
   stage: build-cross
   script:
-    - ci/build.sh native install
+    - ci/build.sh native install --upload
   tags:
     - linux
 
-.build-macos:
+build-macos:
   <<: *common-cross
   stage: build-cross
   script:
-    - ci/build.sh native install
+    - ci/build.sh native install --upload
   tags:
     - macos
 
