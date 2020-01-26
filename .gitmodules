@@ -1,0 +1,3 @@
+[submodule "ci"]
+	path = ci
+	url = https://gitlab.gerph.org/riscos/build/ci.git
