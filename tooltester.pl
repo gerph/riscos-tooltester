@@ -342,7 +342,8 @@ if (!defined $testtool ||
     exit 1;
 }
 
-my $extensions_re = "s|hdr|c|h|cmhg|s_c|o|aof|bin|x";
+my $extensions_dir_re = "s|hdr|c|h|cmhg|s_c|o|aof|bin|x";
+my $extensions_re = "xml|log|txt";
 
 my ($none, $testtoolname) = ($testtool =~ /(^|\/)([^\/]*)$/);
 
@@ -374,6 +375,15 @@ my %checkers = (
         'binary' => \&binary_check,
     );
 
+my $dirsep;
+if ($^O eq 'riscos')
+{
+    $dirsep = '.';
+}
+else
+{
+    $dirsep = '/';
+}
 my $tempbase;
 if ($^O eq 'riscos')
 {
@@ -573,7 +583,7 @@ sub setup_variables
         $vars->{'HFILE'} = '';
         $vars->{'BASE'} = '';
     }
-    elsif ($test->{'file'} =~ /(^|.*\.)($extensions_re)\.(.*)/)
+    elsif ($test->{'file'} =~ /(^|.*\.)($extensions_dir_re)\.(.*)/)
     {
         $vars->{'OFILE'} = "$1o.$3";
         $vars->{'SFILE'} = "$1s.$3";
@@ -581,7 +591,7 @@ sub setup_variables
         $vars->{'HFILE'} = "$1h.$3";
         $vars->{'BASE'} = "$3";
     }
-    elsif ($test->{'file'} =~ /^(^|.*\/)($extensions_re)\/(.*)/)
+    elsif ($test->{'file'} =~ /^(^|.*\/)($extensions_dir_re)\/(.*)/)
     {
         $vars->{'OFILE'} = "$1o/$3";
         $vars->{'SFILE'} = "$1s/$3";
@@ -680,35 +690,73 @@ sub number
 sub native_filename
 {
     my ($filename) = @_;
-    my $dirsep;
 
     die "No filename passed to native_filename" if (!defined $filename);
 
-    if ($^O eq 'riscos')
-    {
-        $dirsep = '.';
-    }
-    else
-    {
-        $dirsep = '/';
-    }
-
     print "('$filename'" if ($debug_filename);
-    if ($filename =~ /^(.*)\/($extensions_re)$/)
+    # First the directory exchanges
+    if ($filename =~ /^(.*)\/($extensions_dir_re)$/)
     { # Unix layout, RISC OS syntax
         $filename = "$2$dirsep$1";
     }
-    elsif ($filename =~ /^(.*)\.($extensions_re)$/)
+    elsif ($filename =~ /^(.*)\.($extensions_dir_re)$/)
     { # Unix layout, Unix syntax
         $filename = "$2$dirsep$1";
     }
-    elsif ($filename =~ /^($extensions_re)\/(.*)$/)
+    elsif ($filename =~ /^($extensions_dir_re)\/(.*)$/)
     { # RISCO OS layout, Unix syntax
         $filename = "$1$dirsep$2";
     }
-    elsif ($filename =~ /^($extensions_re)\.(.*)$/)
+    elsif ($filename =~ /^($extensions_dir_re)\.(.*)$/)
     { # RISC OS layout, RISC OS syntax
         $filename = "$1$dirsep$2";
+    }
+
+    # Now the replacements for the plain extension
+    # FIXME: I think this should probably also be performed on the prefix
+    #        in the above names.
+    elsif ($filename =~ /^(.*)\/($extensions_re)$/)
+    {
+        # RISCOS extension layout
+        if ($^O eq 'riscos')
+        {
+            # Nothing to do; we're already in the right format
+        }
+        else
+        {
+            while ($filename =~ s/([^\^\@\$\%\\\.]+)\.\^\.//)
+            {
+                # Strip off <dir>.^ from any components
+            }
+            # Exchange the dots and slashes.
+            $filename =~ tr!./!/.!;
+
+            # Any ^ that are left will be for the root, so replace these
+            $filename =~ s!\^/!../!g;
+
+            # Environment variables <sigh>
+            $filename =~ s/<(.*)\$Dir>/$ENV{uc "$1_DIR"} || die "No variable '$1' in '$filename'"/ieg;
+        }
+    }
+    elsif ($filename =~ /^(.*)\.($extensions_re)$/)
+    {
+        # Unix extension layout
+        if ($^O eq 'riscos')
+        {
+            # Convert to RISC OS format
+
+            # Exchange the dots and slashes.
+            $filename =~ tr!./!/.!;
+
+            while ($filename =~ s!//\.!^.!)
+            {
+                # Replace all the ../ with ^.
+            }
+        }
+        else
+        {
+            # Already in the correct format.
+        }
     }
     print " => '$filename' : $dirsep)" if ($debug_filename);
 
@@ -2016,6 +2064,28 @@ sub binary_check
 # Execute in the directory requested
 # NOTE: On RISC OS, this is destructive, as there is only one CWD.
 chdir "$dir";
+my @dirparts = split m!/!, $dir;
+if (scalar(@dirparts) == 1 && $dir =~ /\./)
+{
+    # They gave a RISC OS path (FIXME: Decide how to convert the path above to native form)
+    @dirparts = split m!\.!, $dir;
+}
+# Strip the specifications of the current directory.
+@dirparts = grep { $_ ne '@' && $_ ne '.' } @dirparts;
+
+# Now build the relative location of the original directory
+my $rootdir;
+if ($^O eq 'riscos')
+{
+    $rootdir = '^.' x scalar(@dirparts);
+    $rootdir = '@.' if ($rootdir eq '');
+}
+else
+{
+    $rootdir = '../' x scalar(@dirparts);
+    $rootdir = './' if ($rootdir eq '');
+}
+
 
 # Ensure we output immediately, so that stderr appears in a sane place
 $| = 1;
@@ -2093,6 +2163,16 @@ if ($total != 0)
 
 if ($junitxml)
 {
+    # Turn the junitxml into a native path
+    $junitxml = native_filename($junitxml);
+    if ($junitxml =~ m!^/! || $junitxml =~ m![\$@%]!)
+    {
+        # Already anchored.
+    }
+    else
+    {
+        $junitxml = $rootdir . $junitxml;
+    }
     write_junitxml($junitxml, @groups);
 }
 
