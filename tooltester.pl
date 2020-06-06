@@ -58,6 +58,8 @@
 #       - Begin a test definition
 # Command: <command>
 #       - Command to execute
+# Capture:
+#       - What we capture from the command ('stdout', 'stderr', 'both'), default 'both'
 # File: <source filename>
 #       - Source filename to apply
 # Args: <arguments>
@@ -69,13 +71,14 @@
 #       - File containing a script of regular expressions and commands to
 #         filter output before comparing to Expectation file. See the
 #         section below on replacement scripts.
-# Creates: <output file>
-#       - Specify a name of a file that is expected to be created.
-#         It will be removed before the test runs, and after it completes.
-#         If it's not present, the test fails.
+# Creates: <output file(s)>
+#       - Specify a name of a file (or files, space separated) that is/are
+#         expected to be created.
+#         They will be removed before the test runs, and after it completes.
+#         If they are not present, the test fails.
 # Length: <length of the created file>
 #       - Expected length of the created file; if it doesn't match, the
-#         test will fail.
+#         test will fail. Must match all files marked as Creates.
 # Removes: <output file>
 #       - Specify a name of a file that is expected to be removed.
 #         An empty file will be created before the test run.
@@ -223,6 +226,10 @@ BEGIN {
     eval "use strict;";
 }
 
+BEGIN {
+    eval "use Time::HiRes qw(time);";
+}
+
 my $testtool = undef;
 my $dir = undef;
 
@@ -350,6 +357,7 @@ my ($none, $testtoolname) = ($testtool =~ /(^|\/)([^\/]*)$/);
 # The parameters that are plain keys
 my %testparams = map { $_ => '$' } (
         'command',
+        'capture',
         'expect',
         'disable',
         'creates',
@@ -496,6 +504,7 @@ sub parse_test_script
                     %$group,
                     'test-index' => scalar(@{$group->{'tests'}}),
                     'name' => $arg,
+                    'duration' => undef,
                 };
             for $key (keys %$test)
             {
@@ -567,12 +576,13 @@ sub setup_variables
 
     $vars->{'TOOL'} = $testtool;
     $vars->{'FILE'} = $test->{'file'} || '';
-    $vars->{'ARGS'} = $test->{'args'} || '';
+    $vars->{'ARGS'} = defined($test->{'args'}) ? $test->{'args'} : '';
     my @args = split / +/, $vars->{'ARGS'};
     my $argn = 1;
-    for $arg (@args)
+    for $arg (0..8)
     {
-        $vars->{'ARG' . $argn} = $arg;
+        my $value = $args[$arg];
+        $vars->{'ARG' . $argn} = defined $value ? $value : '';
         $argn++;
     }
     if (!$test->{'file'})
@@ -671,7 +681,42 @@ sub substitute
     my ($str, $vars) = @_;
     return $str if (!defined $str);
 
-    $str =~ s/(^|[^\\])\$([A-Z]+[0-9]*)/$1 . (defined($vars->{$2}) ? $vars->{$2} : '$' . $2)/eg;
+    # Perl 5.0 doesn't support negative look behind, so the escaping with \$ isn't easy
+    # to capture with a single regex, so we go to a lot of trouble to split the string up
+    # and process individual variables.
+    my @parts = split /\$/, $str;
+    my $escape = 0;
+    # For some reason Perl trims off any trailing elements if the split string appears
+    # at the end of the list. So we put them back as empty elements.
+    my ($trail) = ($str =~ /(\$+)$/);
+    if ($trail)
+    {
+        for $i (1..length($trail))
+        {
+            push @parts, '';
+        }
+    }
+    for $i (0..$#parts)
+    {
+        if ($escape)
+        {
+            $parts[$i - 1] =~ s/\\$/\$/;
+        }
+        elsif ($i != 0)
+        {
+            if ($parts[$i] =~ s/^([A-Z]+[0-9]*)/(defined($vars->{$1}) ? $vars->{$1} : '$' . $1)/e)
+            {
+                # We performed the replacement.
+            }
+            else
+            {
+                # The value wasn't actually a variable, so put the dollar back
+                $parts[$i] = '$' . $parts[$i];
+            }
+        }
+        $escape = ($parts[$i] =~ /\\$/);
+    }
+    $str = join "", @parts;
     return $str;
 }
 
@@ -972,6 +1017,7 @@ sub run_test
     my $name = $test->{'name'};
     my $disable = substitute($test->{'disable'}, $vars);
     my $cmd = substitute($test->{'command'}, $vars);
+    my $capture = substitute($test->{'capture'} || 'both', $vars);
     my $creates = substitute($test->{'creates'}, $vars);
     my $absent = substitute($test->{'absent'}, $vars);
     my $removes = substitute($test->{'removes'}, $vars);
@@ -986,14 +1032,19 @@ sub run_test
 
     if (defined($creates))
     {
-        $creates = native_filename($creates);
-        unlink($creates);
+        my @create_list = split / +/, $creates;
+        for $created (@create_list)
+        {
+            $created = native_filename($created);
+            unlink $created if (-f $created);
+            rmdir $created if (-d $created);
+        }
     }
     if (defined($removes))
     {
         $removes = native_filename($removes);
         # We create the file to check that it's not there at the end.
-        open(my $fh, "> $removes") || die "Cannot create '$removes' for 'removes' check: $!";
+        open(my $fh, '>', $removes) || die "Cannot create '$removes' for 'removes' check: $!";
         close($fh);
     }
 
@@ -1022,6 +1073,22 @@ sub run_test
     $cmdtorun = escape_parameters($cmdtorun, 1);
 
     # FIXME: Probably not correct for RISC OS?
+    if ($capture eq 'stdout')
+    {
+        $cmdtorun .= ' 2> /dev/null';
+    }
+    elsif ($capture eq 'stderr')
+    {
+        $cmdtorun .= ' 2>&1 > /dev/null';
+    }
+    elsif ($capture eq 'both')
+    {
+        $cmdtorun .= ' 2>&1';
+    }
+    else
+    {
+        die "Bad 'capture' specification: must be 'stdout', 'stderr' or 'both', not '$capture'\n";
+    }
     if ($cmdtorun !~ / 2>/)
     {
         $cmdtorun .= ' 2>&1';
@@ -1046,8 +1113,11 @@ sub run_test
     }
 
     my $output;
+    my $duration = undef;
     my $status;
     {
+        my $start_time = time();
+
         # Set up the environment that we run the command under.
         my %oldenv = %ENV;
         if (defined $test->{'env'})
@@ -1060,6 +1130,7 @@ sub run_test
         #print "RUN: '$cmdtorun'\n";
         $output = `$cmdtorun`;
         $status = $?;
+        $test->{'duration'} = time() - $start_time;
         %ENV = %oldenv;
     }
     my $sig = ($status & 255);
@@ -1115,16 +1186,22 @@ sub run_test
     }
     if (!$fail && defined $creates)
     {
-        if (!-e $creates)
+        my @create_list = split / +/, $creates;
+        for $created (@create_list)
         {
-            $fail = "Expected to create $creates, but didn't";
-        }
-        elsif (defined $length)
-        {
-            my $gotlength = -s $creates;
-            if ($gotlength != $length)
+            $created = native_filename($created);
+            if (!-e $created)
             {
-                $fail = "Expected output length $length, but got $gotlength";
+                $fail = "Expected to create $created, but didn't";
+            }
+            elsif (defined $length)
+            {
+                # This only really works if there's a single file
+                my $gotlength = -s $created;
+                if ($gotlength != $length)
+                {
+                    $fail = "Expected output length $length, but got $gotlength";
+                }
             }
         }
 
@@ -1160,8 +1237,13 @@ sub run_test
         # Clear away the successfully created file.
         if (!$fail)
         {
-            unlink $creates if (-f $creates);
-            rmdir $creates if (-d $creates);
+            my @create_list = split / +/, $creates;
+            for $created (@create_list)
+            {
+                $created = native_filename($created);
+                unlink $created if (-f $created);
+                rmdir $created if (-d $created);
+            }
         }
     }
     if ($fail)
@@ -1277,11 +1359,29 @@ sub write_junitxml
         $nfailures = $group->{'fail'};
         $ntests = $group->{'pass'} + $nerrors + $nfailures;
         $nskipped = $group->{'skip'};
-        print $fh "  <testsuite name=\"" . xml_escape($group->{'group'}) . "\" tests=\"$ntests\" failures=\"$nfailures\" errors=\"$nerrors\" skipped=\"$nskipped\">\n";
+        my $duration = 0;
+        for $test (@{ $group->{'tests'} })
+        {
+            next if (!defined $test->{'result'});
+            if (defined $test->{'duration'})
+            {
+                $duration += $test->{'duration'};
+            }
+        }
+        print $fh "  <testsuite name=\"" . xml_escape($group->{'group'}) . "\" tests=\"$ntests\" failures=\"$nfailures\" errors=\"$nerrors\" skipped=\"$nskipped\"";
+        if ($duration)
+        {
+            print $fh sprintf " time=\"%.2f\"", $duration;
+        }
+        print $fh ">\n";
         for $test (@{ $group->{'tests'} })
         {
             next if (!defined $test->{'result'});
             print $fh "    <testcase classname=\"ToolTest\" name=\"" . xml_escape($test->{'name'}) . "\"";
+            if (defined $test->{'duration'})
+            {
+                print $fh sprintf " time=\"%.2f\"", $test->{'duration'};
+            }
             if ($test->{'result'} eq 'pass')
             {
                 print $fh " />\n";
