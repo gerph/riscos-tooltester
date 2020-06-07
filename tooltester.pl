@@ -1214,11 +1214,16 @@ sub run_test
                     my %args = %{$test->{$checker}};
                     my $func = $checkers{$checker};
                     eval {
+                        if ($creates =~ / /)
+                        {
+                            die "Cannot use checkers with multiple 'Creates'\n";
+                        }
+                        my $created = native_filename($creates);
                         for $key (keys %args)
                         {
                             $args{$key} = substitute($args{$key}, $vars);
                         }
-                        $fail = & $func ($creates, \%args);
+                        $fail = & $func ($created, \%args);
                     };
                     if ($@)
                     {
@@ -1348,6 +1353,7 @@ sub write_junitxml
         $nskipped += $group->{'skip'};
     }
 
+    print "Writing JUnitXML file to '$output'\n";
     open(my $fh, "> $output") || die "Cannot write JunitXML '$output': $!";
 
     print $fh "<?xml version=\"1.0\"?>\n";
@@ -1467,7 +1473,7 @@ sub readword
     my $word;
     if (sysread($cfd->{'fh'}, $word, 4) != 4)
     {
-        die "Short read of word";
+        die "Short read of word at offset " . (sysseek($cfd->{'fh'}, 0, 1));
     }
     if ($cfd->{'reverse'})
     {
@@ -1568,7 +1574,7 @@ sub chunkfile
 {
     my ($filename) = @_;
     my $cf = binaryfile($filename);
-    my $cfd = $cf->{'cfd'};
+    my $cfd = $cf->{'bfd'};
 
     $cf->{'MaxChunks'} = 0;
     $cf->{'NumChunks'} = 0;
@@ -2164,14 +2170,18 @@ sub binary_check
 # Execute in the directory requested
 # NOTE: On RISC OS, this is destructive, as there is only one CWD.
 chdir "$dir";
-my @dirparts = split m!/!, $dir;
+my $filtereddir = $dir;
+while ($filtereddir =~ s!\.\./[^./][^./][^/]+!!)
+{} # Remove any ../<dir> components
+my @dirparts = split m!/!, $filtereddir;
 if (scalar(@dirparts) == 1 && $dir =~ /\./)
 {
     # They gave a RISC OS path (FIXME: Decide how to convert the path above to native form)
-    @dirparts = split m!\.!, $dir;
+    @dirparts = split m!\.!, $filtereddir;
 }
 # Strip the specifications of the current directory.
 @dirparts = grep { $_ ne '@' && $_ ne '.' } @dirparts;
+
 
 # Now build the relative location of the original directory
 my $rootdir;
