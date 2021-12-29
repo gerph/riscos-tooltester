@@ -1504,7 +1504,7 @@ sub binaryfile
     local *BFH;
     open(BFH, "< $filename") || die "Cannot read chunk file '$filename'\n";
     my $bfd = {
-            'fh' => \*BFH,
+            'fh' => *BFH,
             'reverse' => 0,
         };
 
@@ -1539,9 +1539,15 @@ sub readword
 {
     my ($cfd) = @_;
     my $word;
-    if (sysread($cfd->{'fh'}, $word, 4) != 4)
+    my $nread;
+    $nread = sysread($cfd->{'fh'}, $word, 4);
+    if (!defined $nread)
     {
-        die "Short read of word at offset " . (sysseek($cfd->{'fh'}, 0, 1));
+        die "Could not read word: $!";
+    }
+    if ($nread != 4)
+    {
+        die "Short read of word at offset " . (sysseek($cfd->{'fh'}, 0, 1)) . " (only $nread read)";
     }
     if ($cfd->{'reverse'})
     {
@@ -1642,6 +1648,7 @@ sub chunkfile
 {
     my ($filename) = @_;
     my $cf = binaryfile($filename);
+    #print("Opened binary file $filename\n");
     my $cfd = $cf->{'bfd'};
 
     $cf->{'MaxChunks'} = 0;
@@ -1649,6 +1656,7 @@ sub chunkfile
     $cf->{'chunks'} = [];
     $cf->{'chunknames'} = {};
 
+    #print("Read first word\n");
     my $word = readword($cfd);
     if ($word == $ChunkFileId)
     {
@@ -1658,6 +1666,7 @@ sub chunkfile
     {
         binary_bigend($cf);
     }
+    #print("  word was: $word\n");
 
     $cf->{'MaxChunks'} = readword($cfd);
     $cf->{'NumChunks'} = readword($cfd);
@@ -1667,6 +1676,7 @@ sub chunkfile
     for $n (0..$cf->{'MaxChunks'}-1)
     {
         my $chunkid = readfixedstring($cfd, 8);
+        #print("Chunk $n is $chunkid\n");
         my $fileoffset = readword($cfd);
         my $size = readword($cfd);
         my $chunk_header = {
