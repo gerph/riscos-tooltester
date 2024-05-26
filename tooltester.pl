@@ -1951,7 +1951,7 @@ sub binaryfile
     local *BFH;
     open(BFH, "< $filename") || die "Cannot read chunk file '$filename'\n";
     my $bfd = {
-            'fh' => *BFH,
+            'fh' => \*BFH,
             'reverse' => 0,
         };
 
