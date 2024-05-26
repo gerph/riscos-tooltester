@@ -1353,7 +1353,6 @@ sub apply_replacements
 # @retval 1     Test failed for some reason
 # @retval 2     Test crashed (signal generated)
 # @retval -1    Test skipped
-
 sub run_test
 {
     my ($test) = @_;
@@ -1468,6 +1467,7 @@ sub run_test
         $input = tempfilename('input');
         my $inputactual = $inputline;
         $inputactual =~ s/\\n/\n/g;
+        $inputactual =~ s/\\x([0-9A-Fa-f][0-9A-Fa-f])/chr(hex($1))/ge;
         open(INFH, "> $input") || die "Cannot create temporary input file '$input': $!";
         print INFH "$inputactual\n";
         close(INFH);
