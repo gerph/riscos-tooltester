@@ -185,6 +185,9 @@
 #       - Check parts of the file according to a 'checkfile' containing
 #         lines describing the checks to perform, in the form:
 #           <offset> [word|byte|string>: <value>
+#   binary:replace: <replacement file>
+#       - File containing regular expressions to replace before
+#         comparing to the matches file
 #
 # Replacement script syntax:
 #
@@ -2153,6 +2156,11 @@ sub binary_check
     my ($filename, $args) = @_;
 
     my $bin = binary_load($filename);
+
+    if ($args->{'replace'})
+    {
+        $bin = apply_replacements($args->{'replace'}, $bin);
+    }
 
     if ($args->{'checkfile'})
     {
