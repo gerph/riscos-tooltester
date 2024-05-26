@@ -267,7 +267,11 @@ my $showcmd = 0;
 
 # Output controls
 my $outputdump = 0;
+my $outputdiff = 0;
 my $outputsavedir = undef;
+
+# How far ahead we look to synchronise
+my $diff_maxsearchdist = 100;
 
 # How the JUnitXML is constructed
 my $groups_in_junitxml_classes = 1;
@@ -280,6 +284,9 @@ my $reset_colour = "\e[0m";
 my $fail_colour = "\e[31m";
 my $crash_colour = "\e[35m";
 my $ok_colour = "\e[32m";
+my $control_colour = "\e[36m";
+my $diffadd_colour = "\e[33m";
+my $diffdel_colour = "\e[35m";
 
 if ($riscos)
 {
@@ -291,6 +298,9 @@ if ($riscos)
         $fail_colour = "\x11\x01"; # Hopefully red
         $crash_colour = "\x11\x05"; # Hopefully purple
         $ok_colour = "\x11\x04"; # Hopefully green
+        $control_colour = "\x11\x06"; # Hopefully cyan
+        $diffadd_colour = "\x11\x03"; # Hopefully yellow
+        $diffdel_colour = "\x11\x05"; # Hopefully purple
     }
     else
     {
@@ -298,6 +308,9 @@ if ($riscos)
         $fail_colour = "";
         $crash_colour = "";
         $ok_colour = "";
+        $control_colour = "";
+        $diffadd_colour = "";
+        $diffdel_colour = "";
     }
 }
 
@@ -329,6 +342,10 @@ while ($arg = shift)
         elsif ($switch eq 'show-output')
         {
             $outputdump = 1;
+        }
+        elsif ($switch eq 'show-diff')
+        {
+            $outputdiff = 1;
         }
         elsif ($switch eq 'save-output')
         {
@@ -459,6 +476,20 @@ END {
     {
         unlink $name;
     }
+}
+
+sub max
+{
+    my ($a, $b) = @_;
+    return $a if ($a > $b);
+    return $b;
+}
+
+sub min
+{
+    my ($a, $b) = @_;
+    return $a if ($a < $b);
+    return $b;
 }
 
 ##
@@ -809,6 +840,179 @@ sub number
     }
     return $str;
 }
+
+# Escape any control characters for presentation.
+sub escape_controls
+{
+    my ($str) = @_;
+    if ($str !~ /[\x00-\x1f\x7f]/)
+    {
+        # No controls present, so we're fine to return as is.
+        return $str;
+    }
+    $str =~ s/\x1b/${control_colour}\\e${reset_colour}/g;
+    $str =~ s/\x07/${control_colour}\\a${reset_colour}/g;
+    $str =~ s/\x08/${control_colour}\\b${reset_colour}/g;
+    $str =~ s/\x03/${control_colour}\\c${reset_colour}/g;
+    $str =~ s/\x09/${control_colour}\\t${reset_colour}/g;
+    $str =~ s/\x0b/${control_colour}\\v${reset_colour}/g;
+    $str =~ s/\x0c/${control_colour}\\f${reset_colour}/g;
+    $str =~ s/\x0d/${control_colour}\\r${reset_colour}/g;
+    $str =~ s/([\x00-\x06\x0e-\x1a\x1c-\x1f\x7f])/"${control_colour}\\x" . sprintf('%02x', ord($1)) . "${reset_colour}"/ge;
+    return $str;
+}
+
+
+##
+# Perform a simple diff on the two input strings.
+#
+# @param:   $result     the result we got ('good' text)
+# @param:   $expected   what we expected to get ('bad' text)
+# @param:   $indent     How much the text should be indented
+sub diff
+{
+    my ($result, $expected, $indent) = @_;
+
+    my @resultlist = split /\n/, $result;
+    my @expectlist = split /\n/, $expected;
+    @resultlist = () if ($result eq '');
+    @expectlist = () if ($expected eq '');
+    if ($result !~ /\n$/ && $result ne '')
+    {
+        push @resultlist, '<missing-trailing-newline>';
+    }
+    if ($expected !~ /\n$/ && $expected ne '')
+    {
+        push @expectlist, '<missing-trailing-newline>';
+    }
+    my $resultlen = scalar(@resultlist);
+    my $expectlen = scalar(@expectlist);
+
+    my $longestnum = max(length("$resultlen"), length("$expectlen"));
+    my $longestlen = max($resultlen, $expectlen);
+    my @message;
+    my $rlinenum = 1;
+    my $elinenum = 1;
+
+    while ($rlinenum <= $longestlen &&
+           $elinenum <= $longestlen)
+    {
+        my $resultline = $rlinenum > $resultlen ? undef : $resultlist[$rlinenum-1];
+        my $expectline = $elinenum > $expectlen ? undef : $expectlist[$elinenum-1];
+
+        my $diff = ':';
+        my $diff_colour = '';
+        my $done_colour = '';
+        if (!defined $expectline)
+        {
+            $diff = '+';
+            $diff_colour = $diffadd_colour;
+            $done_colour = $reset_colour;
+        }
+        elsif (!defined $resultline)
+        {
+            $diff = '-';
+            $diff_colour = $diffdel_colour;
+            $done_colour = $reset_colour;
+        }
+        elsif ($resultline ne $expectline)
+        {
+            if (1)
+            {
+                # The lines differ. Ok, so we want to see how far we can go before
+                # we get back to a line that is the same.
+                my $rgap = undef;
+                my $egap = undef;
+                my $rsearchdist = min($resultlen - $rlinenum, $diff_maxsearchdist);
+                my $esearchdist = min($expectlen - $elinenum, $diff_maxsearchdist);
+                my $searchdist = min($rsearchdist, $esearchdist);
+
+                # First let's do a simple check - if the lines synchronise with
+                # both increasing then we just changed line(s).
+                my $n;
+                if ($searchdist)
+                {
+                    for $n (1..$searchdist)
+                    {
+                        if ($resultlist[$rlinenum-1 + $n] eq $expectlist[$elinenum-1 + $n])
+                        {
+                            $rgap = $n;
+                            $egap = $n;
+                            last;
+                        }
+                    }
+                }
+                if (!$egap && !$rgap)
+                {
+                    # We never synchronised equally. Let's see if something was inserted.
+                    # Inserted text means that the expectation turns up later in
+                    # the result.
+                    for $n (1..$rsearchdist)
+                    {
+                        #push @message, "Diff$n/$searchdist: $expectline = $resultlist[$rlinenum-1 + $n] ?";
+                        if ($resultlist[$rlinenum-1 + $n] eq $expectline)
+                        {
+                            $rgap = $n;
+                            last;
+                        }
+                    }
+
+                    if (!$rgap)
+                    {
+                        # We never synchronised after insertion; maybe this was a deletion.
+                        # Deleted text means that the result turns up later in the expectation.
+                        for $n (1..$esearchdist)
+                        {
+                            #push @message, "Diff$n/$searchdist: $resultline = $expectlist[$elinenum-1 + $n] ?";
+                            if ($expectlist[$elinenum-1 + $n] eq $resultline)
+                            {
+                                $egap = $n;
+                                last;
+                            }
+                        }
+                    }
+                }
+
+                #push @message, "Skip: $rgap, $egap";
+                if ($egap)
+                {
+                    for $n (0..$egap - 1)
+                    {
+                        push @message, sprintf "%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectlist[$elinenum-1 + $n]), $reset_colour;
+                    }
+                    $elinenum+=$egap;
+                }
+                if ($rgap)
+                {
+                    for $n (0..$rgap - 1)
+                    {
+                        push @message, sprintf "%*s %s+ %s%s", $longestnum, $rlinenum + $n, $diffadd_colour, escape_controls($resultlist[$rlinenum-1 + $n]), $reset_colour;
+                    }
+                    $rlinenum+=$rgap;
+                }
+                if ($egap || $rgap)
+                {
+                    next;
+                }
+            }
+            $diff = '+';
+            $diff_colour = $diffadd_colour;
+            $done_colour = $reset_colour;
+        }
+        push @message, sprintf "%*d %s%s %s%s", $longestnum, $rlinenum, $diff_colour, $diff, escape_controls($diff eq '-' ? $expectline : $resultline), $done_colour;
+        if (defined $expectline &&
+            defined $resultline &&
+            $resultline ne $expectline)
+        {
+            push @message, sprintf "%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectline), $reset_colour;
+        }
+        $rlinenum ++;
+        $elinenum ++;
+    }
+
+    print map { "$indent$_\n" } @message;
+}
+
 
 sub native_filename
 {
@@ -1248,6 +1452,7 @@ sub run_test
     my $output;
     my $duration = undef;
     my $status;
+    my $check_reporter = undef;
     {
         my $start_time = time();
 
@@ -1304,6 +1509,7 @@ sub run_test
         {
             $output = apply_replacements($replacements, $output);
         }
+        $test->{'result_expected'} = $expected;
         if ($output ne $expected)
         {
             $fail = "Expected output did not match";
@@ -1378,6 +1584,13 @@ sub run_test
                     }
                     if ($fail)
                     {
+                        if (ref($fail) eq 'ARRAY')
+                        {
+                            # If they returned a function to report on the failure,
+                            # remember it so that we can use it later.
+                            $check_reporter = $fail->[1];
+                            $fail = $fail->[0];
+                        }
                         $fail = "$checker: $fail";
                         last;
                     }
@@ -1442,7 +1655,15 @@ sub run_test
         {
             if ($outputdump)
             {
-                print map { "    $_\n" } split /\n/, $output;
+                print map { "    $_\n" } split /\n/, escape_controls($output);
+            }
+            if ($outputdiff && defined($test->{'result_expected'}))
+            {
+                diff($output, $test->{'result_expected'}, '    ');
+            }
+            if (defined $check_reporter)
+            {
+                & $check_reporter ('    ');
             }
         }
     }
@@ -2269,7 +2490,12 @@ sub text_check
                 || die "Cannot write actual output content '$native_expect-actual': $!";
             print FH $txt;
             close(FH);
-            return "Does not match expected text file (see $native_expect-actual)";
+            return ["Does not match expected text file (see $native_expect-actual)",
+                    sub {
+                        my ($indent) = @_;
+                        print "$indent ------ Expected file $arts->{'matches'}\n";
+                        diff($txt, $expected, $indent);
+                    }];
         }
         else
         {
