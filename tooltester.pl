@@ -52,6 +52,8 @@
 #
 # Include: <filename>
 #       - Include another file as if it were inline
+# Suite: <name>
+#       - Suite name to include for JUnitXML output; will be inferred from test name.
 # Group: <name>
 #       - Begin a group definition
 # Test: <name>
@@ -253,6 +255,7 @@ my $help = 0;
 my $debug_filename = 0;
 my $debug_replace = 0;
 my $debug_aof = 0;
+my $debug_junitxml = 0;
 
 # Matching for test selection
 my $matchgroup_re = undef;
@@ -265,6 +268,9 @@ my $showcmd = 0;
 # Output controls
 my $outputdump = 0;
 my $outputsavedir = undef;
+
+# How the JUnitXML is constructed
+my $groups_in_junitxml_classes = 1;
 
 # Name of the test script to execute
 my $testscript = $riscos ? "tests/txt" : "tests.txt";
@@ -355,6 +361,8 @@ while ($arg = shift)
                 { $debug_replace = 1; }
                 if ($debugname eq 'aof' || $debugname eq 'all')
                 { $debug_aof = 1; }
+                if ($debugname eq 'junitxml' || $debugname eq 'all')
+                { $debug_junitxml = 1; }
             }
         }
         else
@@ -473,11 +481,25 @@ sub tempfilename
 sub parse_test_script
 {
     my ($testscript) = (@_);
+    my $suite = undef;
     my $group = undef;
     my $test = undef;
     my $acc = undef;
     my @lines;
     my @groups;
+    if ($testscript =~ m!(?:^|[\./])([^\./]+)[\./]txt$!)
+    {
+        # Infer a suite name for the group.
+        $suite = $1;
+        print "Suite name found: '$suite'\n" if ($debug_junitxml);
+        if ($suite !~ /[A-Z]/)
+        {
+            # No capitals, so capitalise it ourselves, and tidy up naming.
+            $suite =~ s/-/ /g;
+            $suite = join ' ', map { ucfirst } split / /, $suite;
+            $suite =~ s/^Tests? //;
+        }
+    }
     open(TESTFH, "< $testscript") || die "Cannot open test script '$testscript': $!";
     while (<TESTFH>)
     {
@@ -527,11 +549,17 @@ sub parse_test_script
             # Process an include file
             push @groups, parse_test_script($arg);
         }
+        elsif ($cmd eq 'Suite')
+        {
+            $suite = $arg;
+        }
         elsif ($cmd eq 'Group')
         {
             $group = {
+                    'suite' => $suite || undef,
                     'group-index' => scalar(@groups),
                     'group' => $arg,
+                    'timestamp' => undef,
                     'tests' => [],
                     'pass' => 0,
                     'fail' => 0,
@@ -1489,61 +1517,165 @@ sub write_junitxml
     open(FH, "> $output") || die "Cannot write JunitXML '$output': $!";
 
     print FH "<?xml version=\"1.0\"?>\n";
-    # FIXME: Should skipped be mapped to 'disabled' at the top level?
-    print FH "<testsuites tests=\"$ntests\" failures=\"$nfailures\" errors=\"$nerrors\">\n";
+    my $hostname;
+    my %properties;
+    if ($riscos)
+    {
+        $hostname = $ENV{'Inet$Hostname'};
+        $properties{'os'} = 'riscos';
+    }
+    else
+    {
+        $hostname = `hostname -f`;
+        chomp($hostname);
+        $hostname = undef if ($hostname eq 'localhost');
+        $properties{'os'} = $^O;
+    }
+    # For GitLab: https://docs.gitlab.com/ee/ci/variables/predefined_variables.html
+    # For GitHub: https://docs.github.com/en/actions/learn-github-actions/variables#default-environment-variables
+    if ($ENV{'GITHUB_SERVER_URL'}) # GitHub
+    {
+        $properties{'ci'} = $ENV{'GITHUB_SERVER_URL'} . '/' . $ENV{'GITHUB_REPOSITORY'} . '/actions/runs/' .
+                            $ENV{'GITHUB_RUN_ID'};
+    }
+    elsif ($ENV{'CI_JOB_URL'}) # GitLab
+    {
+        $properties{'ci'} = $ENV{'CI_JOB_URL'};
+    }
+    if ($ENV{'GITHUB_REF_NAME'}) # GitHub
+    {
+        $properties{'branch'} = $ENV{'GITHUB_REF_NAME'};
+    }
+    elsif ($ENV{'CI_COMMIT_BRANCH'}) # GitLab
+    {
+        $properties{'branch'} = $ENV{'CI_COMMIT_BRANCH'}
+    }
+    if ($ENV{'GITHUB_SHA'}) # GitHub
+    {
+        $properties{'sha'} = $ENV{'GITHUB_SHA'};
+    }
+    elsif ($ENV{'CI_COMMIT_SHA'}) # GitLab
+    {
+        $properties{'sha'} = $ENV{'CI_COMMIT_SHA'};
+    }
+    print FH "<testsuites tests=\"$ntests\" failures=\"$nfailures\" skipped=\"$skipped\" errors=\"$nerrors\">\n";
+
+    # To build the JUnitXML file we construct a list of suites that were run, and then
+    # write them out.
+    my @suiteorder;
+    my %suites;
     for $group (@groups)
     {
-        $nerrors = $group->{'crash'};
-        $nfailures = $group->{'fail'};
-        $ntests = $group->{'pass'} + $nerrors + $nfailures;
-        $nskipped = $group->{'skip'};
-        my $duration = 0;
-        for $test (@{ $group->{'tests'} })
+        my $suitename;
+        if ($groups_in_junitxml_classes)
         {
-            next if (!defined $test->{'result'});
-            if (defined $test->{'duration'})
+            $suitename = $group->{'suite'} || 'ToolTest';
+        }
+        else
+        {
+            $suitename = $group->{'suite'} ? "$group->{'suite'}: $group->{'group'}" : $group->{'group'};
+        }
+        if (!defined $suites{$suitename})
+        {
+            # This is a new suite, so we need to create it.
+            $suites{$suitename} = [];
+            push @suiteorder, $suitename;
+        }
+        push @{ $suites{$suitename} }, $group;
+    }
+
+    # Step through all the suites that we've created and add them to the JUnitXML file.
+    my $suite;
+    for $suite (@suiteorder)
+    {
+        my @suitegroups = @{ $suites{$suite} };
+        my $first = 1;
+
+        print "JUnitXML: Generate suite: '$suite': ", (scalar(@suitegroups)), " groups present\n" if ($debug_junitxml);
+
+        # Summarise all the groups in this suite
+        $nerrors = 0;
+        $nfailures = 0;
+        $ntests = 0;
+        $nskipped = 0;
+        my $duration = 0;
+        my $firstgroup = undef;
+        for $group (@suitegroups)
+        {
+            print "  Group: $group->{'group'}\n" if ($debug_junitxml);
+            $firstgroup = $group if (!$firstgroup);
+            $nerrors += $group->{'crash'};
+            $nfailures += $group->{'fail'};
+            $ntests += $group->{'pass'} + $nerrors + $nfailures;
+            $nskipped += $group->{'skip'};
+            for $test (@{ $group->{'tests'} })
             {
-                $duration += $test->{'duration'};
+                next if (!defined $test->{'result'});
+                if (defined $test->{'duration'})
+                {
+                    $duration += $test->{'duration'};
+                }
             }
         }
-        print FH "  <testsuite name=\"" . xml_escape($group->{'group'}) . "\" tests=\"$ntests\" failures=\"$nfailures\" errors=\"$nerrors\" skipped=\"$nskipped\"";
+
+        print FH "  <testsuite name=\"" . xml_escape($suite) . "\"";
+        print FH " tests=\"$ntests\" failures=\"$nfailures\" errors=\"$nerrors\" skipped=\"$nskipped\"";
+        if ($hostname)
+        {
+            print FH " hostname=\"$hostname\"";
+        }
         if ($duration)
         {
             print FH sprintf " time=\"%.2f\"", $duration;
         }
-        print FH ">\n";
-        for $test (@{ $group->{'tests'} })
+        if (defined $firstgroup->{'timestamp'})
         {
-            next if (!defined $test->{'result'});
-            print FH "    <testcase classname=\"ToolTest\" name=\"" . xml_escape($test->{'name'}) . "\"";
-            if (defined $test->{'duration'})
+            my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = gmtime($firstgroup->{'timestamp'});
+            print FH sprintf " timestamp=\"%04s-%02s-%02sT%02s:%02s:%02s\"", 1900 + $year, $mon + 1, $mday, $hour, $min, $sec;
+        }
+        print FH ">\n";
+        print FH "<properties>\n";
+        for $prop (sort keys %properties)
+        {
+            print FH "    <property name=\"$prop\" value=\"".xml_escape($properties{$prop})."\"/>\n";
+        }
+        print FH "</properties>\n";
+        for $group (@suitegroups)
+        {
+            for $test (@{ $group->{'tests'} })
             {
-                print FH sprintf " time=\"%.2f\"", $test->{'duration'};
-            }
-            if ($test->{'result'} eq 'pass')
-            {
-                print FH " />\n";
-            }
-            else
-            {
-                my $message = "$test->{'result'}: $test->{'result_message'}";
-                print FH ">\n";
-                my $tag = $result_tag_name{ $test->{'result'} };
-                print FH "      <$tag";
-                if ($has_message{ $test->{'result'} })
+                next if (!defined $test->{'result'});
+                my $classname = $groups_in_junitxml_classes ? $group->{'group'} : 'ToolTest';
+                print FH "    <testcase classname=\"$classname\" name=\"" . xml_escape($test->{'name'}) . "\"";
+                if (defined $test->{'duration'})
                 {
-                    print FH " message=\"$message\"";
+                    print FH sprintf " time=\"%.2f\"", $test->{'duration'};
                 }
-                print FH ">";
-                my $output = $test->{'result_output'};
-                if ($output)
+                if ($test->{'result'} eq 'pass')
                 {
-                    # Escape any ]]> that might confuse the CDATA
-                    $output =~ s/]]>/]]]]><!\[CDATA\[>/g;
-                    print FH "<![CDATA[${output}]]>\n";
+                    print FH " />\n";
                 }
-                print FH "      </$tag>\n";
-                print FH "    </testcase>\n";
+                else
+                {
+                    my $message = "$test->{'result'}: $test->{'result_message'}";
+                    print FH ">\n";
+                    my $tag = $result_tag_name{ $test->{'result'} };
+                    print FH "      <$tag";
+                    if ($has_message{ $test->{'result'} })
+                    {
+                        print FH " message=\"$message\"";
+                    }
+                    print FH ">";
+                    my $output = $test->{'result_output'};
+                    if ($output)
+                    {
+                        # Escape any ]]> that might confuse the CDATA
+                        $output =~ s/]]>/]]]]><!\[CDATA\[>/g;
+                        print FH "<![CDATA[${output}]]>\n";
+                    }
+                    print FH "      </$tag>\n";
+                    print FH "    </testcase>\n";
+                }
             }
         }
         print FH "  </testsuite>\n";
@@ -2383,6 +2515,8 @@ for $group (@groups)
         $skip += $group->{'skip'};
         next;
     }
+    # Remember when this group was started
+    $group->{'timestamp'} = time();
     print "$group->{'group'}:\n";
     $group->{'skip'} = 0;
     for $test (@{ $group->{'tests'} })
