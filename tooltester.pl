@@ -76,6 +76,11 @@
 #         expected to be created.
 #         They will be removed before the test runs, and after it completes.
 #         If they are not present, the test fails.
+# CreatesDir: <output dir(s)>
+#       - Specify a name of a directory (or more, space separated) that is/are
+#         expected to be created.
+#         They will be removed before the test runs, and after it completes.
+#         If they are not present, the test fails.
 # Length: <length of the created file>
 #       - Expected length of the created file; if it doesn't match, the
 #         test will fail. Must match all files marked as Creates.
@@ -396,6 +401,7 @@ my %testparams = map { $_ => '$' } (
         'expect',
         'disable',
         'creates',
+        'createsdir',
         'length',
         'removes',
         'absent',
@@ -874,6 +880,25 @@ sub read_file
     return $expected;
 }
 
+
+##
+# Recursive directory deletion
+#
+# @param $dir       Directory to delete
+sub recursive_rmdir
+{
+    my ($dir) = @_;
+    # FIXME: We should do this properly, enumerating the files and then deleting them.
+    # That would be portable and able to work on whatever system we run on.
+    # However, I'm being lazy and just need this to work on POSIX systems right now.
+    #print "Recursively deleting $dir\n";
+    system "rm -rf $dir" || die "Cannot delete '$dir': $!";
+    if (-d $dir) {
+        die "Did not delete $dir\n";
+    }
+}
+
+
 ##
 # Read a command file with directives and comments.
 #
@@ -1066,6 +1091,7 @@ sub run_test
     my $cmd = substitute($test->{'command'}, $vars);
     my $capture = substitute($test->{'capture'} || 'both', $vars);
     my $creates = substitute($test->{'creates'}, $vars);
+    my $createsdir = substitute($test->{'createsdir'}, $vars);
     my $absent = substitute($test->{'absent'}, $vars);
     my $removes = substitute($test->{'removes'}, $vars);
     my $length = substitute($test->{'length'}, $vars);
@@ -1085,6 +1111,16 @@ sub run_test
             $created = native_filename($created);
             unlink $created if (-f $created);
             rmdir $created if (-d $created);
+        }
+    }
+    if (defined($createsdir))
+    {
+        my @createdir_list = split / +/, $createsdir;
+        for $created (@createdir_list)
+        {
+            $created = native_filename($created);
+            unlink $created if (-f $created);
+            recursive_rmdir($created) if (-d $created);
         }
     }
     if (defined($removes))
@@ -1319,6 +1355,20 @@ sub run_test
                 unlink $created if (-f $created);
                 rmdir $created if (-d $created);
             }
+        }
+    }
+    if (!$fail && defined $createsdir)
+    {
+        my @create_list = split / +/, $createsdir;
+        #print "Checking $createsdir\n";
+        for $created (@create_list)
+        {
+            $created = native_filename($created);
+            if (!-d $created)
+            {
+                $fail = "Expected to create directory $created, but didn't";
+            }
+            recursive_rmdir($created);
         }
     }
     if ($fail)
