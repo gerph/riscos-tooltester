@@ -2255,6 +2255,18 @@ sub binary_check
 
 # Execute in the directory requested
 # NOTE: On RISC OS, this is destructive, as there is only one CWD.
+my $oldroot;
+if ($^O eq 'riscos')
+{
+    # Remember the PWD - it's called `\` on RISC OS
+    $oldroot = '\\';
+}
+else
+{
+    $oldroot = `pwd`;
+    chomp($oldroot);
+    $oldroot .= '/';
+}
 chdir "$dir";
 my $filtereddir = $dir;
 while ($filtereddir =~ s!\.\./[^./][^./][^/]+!!)
@@ -2278,8 +2290,15 @@ if ($^O eq 'riscos')
 }
 else
 {
-    $rootdir = '../' x scalar(@dirparts);
-    $rootdir = './' if ($rootdir eq '');
+    if ($dir =~ m!^/!)
+    {
+        $rootdir = $oldroot;
+    }
+    else
+    {
+        $rootdir = '../' x scalar(@dirparts);
+        $rootdir = './' if ($rootdir eq '');
+    }
 }
 
 
