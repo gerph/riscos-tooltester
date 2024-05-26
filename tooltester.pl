@@ -692,6 +692,21 @@ sub parse_test_script
     return @groups;
 }
 
+##
+# Extract some quoted parameters from a string.
+#
+# We use repeated quotes in a string to indicate a quoted string.
+#
+# @param $string:   Quoted parameters to parse
+#
+# @return:  list of parameters (still with their quotes around them)
+sub extract_quoted_parameters
+{
+    my ($string) = @_;
+    my @arglist = ($string =~ /("(?:[^"]|"")*"|[^ ]+)(?: +|$)/g);
+    return @arglist;
+}
+
 sub setup_variables
 {
     my ($test) = @_;
@@ -700,7 +715,7 @@ sub setup_variables
     $vars->{'TOOL'} = $testtool;
     $vars->{'FILE'} = $test->{'file'} || '';
     $vars->{'ARGS'} = defined($test->{'args'}) ? $test->{'args'} : '';
-    my @args = split / +/, $vars->{'ARGS'};
+    my @args = extract_quoted_parameters($vars->{'ARGS'});
     my $argn = 1;
     for $arg (0..8)
     {
