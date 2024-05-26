@@ -214,6 +214,7 @@
 #       - [<number>]-[<number>] or <number> for line range to apply rule to.
 #         Line numbers start at 1.
 #       - /<regular expression>/ for expression to match.
+#       - Both the above conditions may be suffixed by `!` to negate matches.
 #   - Actions:
 #       - `p` immediately include the line in the output, and move on to the next line
 #       - `q` immediately terminate all input processing (ends the output without this line).
@@ -975,11 +976,22 @@ sub apply_replacements
             { $condition = "\$index >= $1 && \$index <= $2"; }
             elsif ($range =~ /^([0-9]+)-$/)
             { $condition = "\$index >= $1"; }
+
+            if ($line =~ s/^! *//)
+            {
+                $condition = "! ($condition)";
+            }
             push @conditions, $condition;
         }
 
         # Conditions for regular expression matches
-        if ($line =~ s!^([^a-zA-Z0-9])(.*[^\\]|)\1 +!!)
+        if ($line =~ s!^([^a-zA-Z0-9])(.*[^\\]|)\1 +\! *!!)
+        {
+            my ($delimiter, $match) = ($1, $2);
+            my $condition = "\$line !~ m$delimiter$match$delimiter";
+            push @conditions, $condition;
+        }
+        elsif ($line =~ s!^([^a-zA-Z0-9])(.*[^\\]|)\1 +!!)
         {
             my ($delimiter, $match) = ($1, $2);
             my $condition = "\$line =~ m$delimiter$match$delimiter";
