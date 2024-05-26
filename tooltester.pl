@@ -555,10 +555,17 @@ sub parse_test_script
         {
             # Not a base command specification; so try a checker value.
             ($checker, $cmd, $arg) = ($line =~ /^([A-Za-z]+):([A-Za-z]+): *(.*?) *$/);
-            $checker = lc $checker;
-            if (!defined $checkers{$checker})
+            if (!$checker)
             {
-                die "Unrecognised checker '$checker' in line '$line' whilst reading '$testscript'";
+                ($minus, $checker, $cmd, $arg) = ($line =~ /^(-?)([A-Za-z]+):([A-Za-z]+):$/);
+            }
+            if ($checker)
+            {
+                $checker = lc $checker;
+                if (!defined $checkers{$checker})
+                {
+                    die "Unrecognised checker '$checker' in line '$line' whilst reading '$testscript'";
+                }
             }
         }
 
@@ -573,7 +580,14 @@ sub parse_test_script
             {
                 $acc->{$checker} = {};
             }
-            $acc->{$checker}->{lc $cmd} = $arg;
+            if ($minus)
+            {
+                delete $acc->{$checker}->{lc $cmd};
+            }
+            else
+            {
+                $acc->{$checker}->{lc $cmd} = $arg;
+            }
         }
         elsif ($cmd eq 'Include')
         {
