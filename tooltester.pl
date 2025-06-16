@@ -1528,7 +1528,7 @@ sub run_test
     {
         $fail = "Expected RC $wantrc, got $rc";
     }
-    if (!$fail && defined $expect)
+    if (defined $expect)
     {
         my $expected = read_file($expect, 'expect file');
         my $native_expect = native_filename($expect);
@@ -1541,7 +1541,7 @@ sub run_test
         $test->{'result_expected'} = $expected;
         if ($output ne $expected)
         {
-            $fail = "Expected output did not match";
+            $fail = "Expected output did not match" if (!$fail);
             open(FH, "> $native_expect-actual") || die "Could not write expected output to '$native_expect-actual': $!";
             print FH $output;
             close(FH);
