@@ -269,9 +269,15 @@ my $showcmd = 0;
 my $outputdump = 0;
 my $outputdiff = 0;
 my $outputsavedir = undef;
+my $diff_files_expected = undef;
+my $diff_files_actual = undef;
 
 # How far ahead we look to synchronise
 my $diff_maxsearchdist = 100;
+
+# How many unchanged lines to keep around changed sections in a diff.
+# An undef value preserves all unchanged lines.
+my $diff_retain_unchanged = undef;
 
 # How the JUnitXML is constructed
 my $groups_in_junitxml_classes = 1;
@@ -347,6 +353,24 @@ while ($arg = shift)
         {
             $outputdiff = 1;
         }
+        elsif ($switch eq 'diff-files')
+        {
+            $diff_files_expected = shift;
+            $diff_files_actual = shift;
+            if (!defined $diff_files_expected || !defined $diff_files_actual)
+            {
+                die "--diff-files requires <expected-file> <actual-file>\n";
+            }
+        }
+        elsif ($switch eq 'diff-context')
+        {
+            $diff_retain_unchanged = shift;
+            if (!defined $diff_retain_unchanged ||
+                $diff_retain_unchanged !~ /^\d+$/)
+            {
+                die "--diff-context requires a non-negative integer\n";
+            }
+        }
         elsif ($switch eq 'save-output')
         {
             $outputsavedir= shift;
@@ -397,14 +421,30 @@ while ($arg = shift)
     }
 }
 
+if (defined $diff_files_expected)
+{
+    my $native_expected = $riscos ? native_filename($diff_files_expected) : $diff_files_expected;
+    my $native_actual = $riscos ? native_filename($diff_files_actual) : $diff_files_actual;
+    die "Expected file '$native_expected' does not exist\n" if (!-f $native_expected);
+    die "Actual file '$native_actual' does not exist\n" if (!-f $native_actual);
+
+    my $expected = read_plain_file($native_expected, 'expected file');
+    my $actual = read_plain_file($native_actual, 'actual file');
+    my $different = diff($actual, $expected, '');
+    exit($different ? 1 : 0);
+}
+
 if (!defined $testtool ||
     !defined $dir ||
     $help)
 {
     print "Syntax: $0 [<options>] <test tool> <dir>\n";
+    print "   or:  $0 --diff-files <expected-file> <actual-file>\n";
     print "Options:\n";
     print "    -verbose         Verbose output\n";
     print "    -quiet           Not verbose output\n";
+    print "    -diff-files <expected> <actual>  Show only the diff between two files\n";
+    print "    -diff-context <lines>  Keep unchanged diff context around changes\n";
     print "    -script <script> Script file to read (default: 'tests.txt')\n";
     print "    -group <re>      Regular expression to match for group name\n";
     print "    -test <re>       Regular expression to match for test name\n";
@@ -920,6 +960,7 @@ sub diff
     my $longestnum = max(length("$resultlen"), length("$expectlen"));
     my $longestlen = max($resultlen, $expectlen);
     my @message;
+    my $different = 0;
     my $rlinenum = 1;
     my $elinenum = 1;
 
@@ -955,9 +996,13 @@ sub diff
                 my $rsearchdist = min($resultlen - $rlinenum, $diff_maxsearchdist);
                 my $esearchdist = min($expectlen - $elinenum, $diff_maxsearchdist);
                 my $searchdist = min($rsearchdist, $esearchdist);
+                my $bestkind = undef;
+                my $bestrgap = undef;
+                my $bestegap = undef;
 
-                # First let's do a simple check - if the lines synchronise with
-                # both increasing then we just changed line(s).
+                # First let's see whether we can resynchronise by changing
+                # lines on both sides. This is the most general case, but we
+                # only choose it later if it beats the one-sided edits.
                 my $n;
                 if ($searchdist)
                 {
@@ -965,57 +1010,99 @@ sub diff
                     {
                         if ($resultlist[$rlinenum-1 + $n] eq $expectlist[$elinenum-1 + $n])
                         {
-                            $rgap = $n;
-                            $egap = $n;
+                            $bestkind = 'change';
+                            $bestrgap = $n;
+                            $bestegap = $n;
                             last;
                         }
                     }
                 }
-                if (!$egap && !$rgap)
-                {
-                    # We never synchronised equally. Let's see if something was inserted.
-                    # Inserted text means that the expectation turns up later in
-                    # the result.
-                    for $n (1..$rsearchdist)
-                    {
-                        #push @message, "Diff$n/$searchdist: $expectline = $resultlist[$rlinenum-1 + $n] ?";
-                        if ($resultlist[$rlinenum-1 + $n] eq $expectline)
-                        {
-                            $rgap = $n;
-                            last;
-                        }
-                    }
 
-                    if (!$rgap)
+                # See if something was inserted.
+                # Inserted text means that the expectation turns up later in
+                # the result.
+                for $n (1..$rsearchdist)
+                {
+                    #push @message, "Diff$n/$searchdist: $expectline = $resultlist[$rlinenum-1 + $n] ?";
+                    if ($resultlist[$rlinenum-1 + $n] eq $expectline)
                     {
-                        # We never synchronised after insertion; maybe this was a deletion.
-                        # Deleted text means that the result turns up later in the expectation.
-                        for $n (1..$esearchdist)
-                        {
-                            #push @message, "Diff$n/$searchdist: $resultline = $expectlist[$elinenum-1 + $n] ?";
-                            if ($expectlist[$elinenum-1 + $n] eq $resultline)
-                            {
-                                $egap = $n;
-                                last;
-                            }
-                        }
+                        $rgap = $n;
+                        last;
                     }
                 }
+
+                # Now check for a deletion.
+                # Deleted text means that the result turns up later in the expectation.
+                for $n (1..$esearchdist)
+                {
+                    #push @message, "Diff$n/$searchdist: $resultline = $expectlist[$elinenum-1 + $n] ?";
+                    if ($expectlist[$elinenum-1 + $n] eq $resultline)
+                    {
+                        $egap = $n;
+                        last;
+                    }
+                }
+
+                # Choose the lowest-cost resynchronisation:
+                # 1. Fewest lines skipped overall.
+                # 2. Prefer one-sided edits over changes on both sides.
+                # 3. Prefer the earliest resynchronisation point.
+                # 4. Use a deterministic tie-break.
+                if ($rgap)
+                {
+                    my $bestskip = defined $bestkind ? $bestrgap + $bestegap : undef;
+                    my $bestsides = defined $bestkind ? (($bestrgap ? 1 : 0) + ($bestegap ? 1 : 0)) : undef;
+                    my $bestdist = defined $bestkind ? max($bestrgap, $bestegap) : undef;
+                    if (!defined $bestkind ||
+                        $rgap < $bestskip ||
+                        ($rgap == $bestskip &&
+                         ($bestsides > 1 ||
+                          ($rgap < $bestdist) ||
+                          ($rgap == $bestdist && $bestkind ne 'insert'))))
+                    {
+                        $bestkind = 'insert';
+                        $bestrgap = $rgap;
+                        $bestegap = 0;
+                    }
+                }
+
+                if ($egap)
+                {
+                    my $bestskip = defined $bestkind ? $bestrgap + $bestegap : undef;
+                    my $bestsides = defined $bestkind ? (($bestrgap ? 1 : 0) + ($bestegap ? 1 : 0)) : undef;
+                    my $bestdist = defined $bestkind ? max($bestrgap, $bestegap) : undef;
+                    if (!defined $bestkind ||
+                        $egap < $bestskip ||
+                        ($egap == $bestskip &&
+                         ($bestsides > 1 ||
+                          ($egap < $bestdist) ||
+                          ($egap == $bestdist && $bestkind eq 'change'))))
+                    {
+                        $bestkind = 'delete';
+                        $bestrgap = 0;
+                        $bestegap = $egap;
+                    }
+                }
+
+                $rgap = $bestrgap;
+                $egap = $bestegap;
 
                 #push @message, "Skip: $rgap, $egap";
                 if ($egap)
                 {
+                    $different = 1;
                     for $n (0..$egap - 1)
                     {
-                        push @message, sprintf "%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectlist[$elinenum-1 + $n]), $reset_colour;
+                        push @message, [sprintf("%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectlist[$elinenum-1 + $n]), $reset_colour), 1];
                     }
                     $elinenum+=$egap;
                 }
                 if ($rgap)
                 {
+                    $different = 1;
                     for $n (0..$rgap - 1)
                     {
-                        push @message, sprintf "%*s %s+ %s%s", $longestnum, $rlinenum + $n, $diffadd_colour, escape_controls($resultlist[$rlinenum-1 + $n]), $reset_colour;
+                        push @message, [sprintf("%*s %s+ %s%s", $longestnum, $rlinenum + $n, $diffadd_colour, escape_controls($resultlist[$rlinenum-1 + $n]), $reset_colour), 1];
                     }
                     $rlinenum+=$rgap;
                 }
@@ -1027,19 +1114,101 @@ sub diff
             $diff = '+';
             $diff_colour = $diffadd_colour;
             $done_colour = $reset_colour;
+            $different = 1;
         }
-        push @message, sprintf "%*d %s%s %s%s", $longestnum, $rlinenum, $diff_colour, $diff, escape_controls($diff eq '-' ? $expectline : $resultline), $done_colour;
+        push @message, [sprintf("%*d %s%s %s%s", $longestnum, $rlinenum, $diff_colour, $diff, escape_controls($diff eq '-' ? $expectline : $resultline), $done_colour), ($diff ne ':')];
         if (defined $expectline &&
             defined $resultline &&
             $resultline ne $expectline)
         {
-            push @message, sprintf "%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectline), $reset_colour;
+            push @message, [sprintf("%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectline), $reset_colour), 1];
+        }
+        if ($diff ne ':')
+        {
+            $different = 1;
         }
         $rlinenum ++;
         $elinenum ++;
     }
 
-    print map { "$indent$_\n" } @message;
+    print map { "$indent$_->[0]\n" } filter_diff_messages(\@message);
+    return $different;
+}
+
+sub filter_diff_messages
+{
+    my ($messages) = @_;
+    my @filtered;
+    my $count = scalar(@$messages);
+    my $keep = $diff_retain_unchanged;
+    my $i;
+    my $has_changes = 0;
+
+    if (!defined $keep)
+    {
+        return @$messages;
+    }
+
+    for $i (0..$count-1)
+    {
+        if ($messages->[$i]->[1])
+        {
+            $has_changes = 1;
+            last;
+        }
+    }
+
+    if (!$has_changes)
+    {
+        return @$messages;
+    }
+
+    $i = 0;
+    while ($i < $count)
+    {
+        if ($messages->[$i]->[1])
+        {
+            push @filtered, $messages->[$i];
+            $i++;
+            next;
+        }
+
+        my $start = $i;
+        while ($i < $count && !$messages->[$i]->[1])
+        {
+            $i++;
+        }
+        my $end = $i - 1;
+        my $runlen = $end - $start + 1;
+        my $changed_before = ($start > 0);
+        my $changed_after = ($i < $count);
+        my $keep_prefix = $changed_before ? $keep : 0;
+        my $keep_suffix = $changed_after ? $keep : 0;
+
+        if ($runlen > ($keep_prefix + $keep_suffix))
+        {
+            my $j;
+            for ($j = $start; $j < $start + $keep_prefix; $j++)
+            {
+                push @filtered, $messages->[$j];
+            }
+            push @filtered, ['...', 0];
+            for ($j = $end - $keep_suffix + 1; $j <= $end; $j++)
+            {
+                push @filtered, $messages->[$j];
+            }
+        }
+        else
+        {
+            my $j;
+            for $j ($start..$end)
+            {
+                push @filtered, $messages->[$j];
+            }
+        }
+    }
+
+    return @filtered;
 }
 
 
@@ -1131,6 +1300,19 @@ sub read_file
 {
     my ($expect, $label) = @_;
     $expect = native_filename($expect);
+    return read_plain_file($expect, $label);
+}
+
+##
+# Read a file without any filename transformations.
+#
+# @param $filename: File to read
+# @param $label:    Name to report in any error
+#
+# @return file content.
+sub read_plain_file
+{
+    my ($expect, $label) = @_;
     my $expected = '';
     if (-f "$expect")
     {
