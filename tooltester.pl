@@ -567,7 +567,7 @@ sub parse_test_script
         {
             # No capitals, so capitalise it ourselves, and tidy up naming.
             $suite =~ s/-/ /g;
-            $suite = join ' ', map { ucfirst } split / /, $suite;
+            $suite = join ' ', map { ucfirst($_) } split / /, $suite;
             $suite =~ s/^Tests? //;
         }
     }
@@ -1093,7 +1093,7 @@ sub diff
                     $different = 1;
                     for $n (0..$egap - 1)
                     {
-                        push @message, [sprintf("%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectlist[$elinenum-1 + $n]), $reset_colour), 1];
+                        push @message, [sprintf("%${longestnum}s %s- %s%s", '', $diffdel_colour, escape_controls($expectlist[$elinenum-1 + $n]), $reset_colour), 1];
                     }
                     $elinenum+=$egap;
                 }
@@ -1102,7 +1102,7 @@ sub diff
                     $different = 1;
                     for $n (0..$rgap - 1)
                     {
-                        push @message, [sprintf("%*s %s+ %s%s", $longestnum, $rlinenum + $n, $diffadd_colour, escape_controls($resultlist[$rlinenum-1 + $n]), $reset_colour), 1];
+                        push @message, [sprintf("%${longestnum}s %s+ %s%s", $rlinenum + $n, $diffadd_colour, escape_controls($resultlist[$rlinenum-1 + $n]), $reset_colour), 1];
                     }
                     $rlinenum+=$rgap;
                 }
@@ -1116,12 +1116,12 @@ sub diff
             $done_colour = $reset_colour;
             $different = 1;
         }
-        push @message, [sprintf("%*d %s%s %s%s", $longestnum, $rlinenum, $diff_colour, $diff, escape_controls($diff eq '-' ? $expectline : $resultline), $done_colour), ($diff ne ':')];
+        push @message, [sprintf("%${longestnum}d %s%s %s%s", $rlinenum, $diff_colour, $diff, escape_controls($diff eq '-' ? $expectline : $resultline), $done_colour), ($diff ne ':')];
         if (defined $expectline &&
             defined $resultline &&
             $resultline ne $expectline)
         {
-            push @message, [sprintf("%*s %s- %s%s", $longestnum, '', $diffdel_colour, escape_controls($expectline), $reset_colour), 1];
+            push @message, [sprintf("%${longestnum}s %s- %s%s", '', $diffdel_colour, escape_controls($expectline), $reset_colour), 1];
         }
         if ($diff ne ':')
         {
