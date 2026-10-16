@@ -1,0 +1,470 @@
+<?xml version="1.0"?>
+<!DOCTYPE riscos-prm PUBLIC "-//Gerph//DTD PRM documentation 1.03//EN"
+                            "http://gerph.org/dtd/103/prm.dtd">
+
+<riscos-prm>
+ <chapter title="riscos-tooltester">
+<section title="Overview">
+<p>
+<userinput>riscos-tooltester</userinput> is a test runner for command-line
+tools. A suite is a plain text description of the commands to run, the output
+and return code each should give, and any files it should create. The runner
+executes each test, compares the result with what the suite expects, and reports
+which tests passed, failed or crashed. It is intended for integration testing of
+the behaviour of a tool as a user sees it, rather than for unit testing.
+</p>
+
+<p>
+The runner is a single Perl script, <filename type="unix">tooltester.pl</filename>,
+which has no dependencies beyond Perl. It is installed under the name
+<filename type="unix">riscos-tooltester</filename>, and it can also be run with
+<userinput>perl tooltester.pl</userinput>.
+</p>
+
+<p>
+This document describes the command line, and then the format of the files that
+make up a suite. The suite is described in a test script, normally
+<filename type="unix">tests.txt</filename>, which refers to files of expected
+output, replacement scripts that normalise output which varies from run to run,
+and data files that the tests use.
+</p>
+</section>
+
+<section title="Command line">
+<command-definition name="riscos-tooltester"
+                    description="Run scripted integration tests for command-line tools">
+<syntax>
+  <optional><switch name="verbose"/></optional>
+  <optional><switch name="quiet"/></optional>
+  <optional><switch name="script"><userreplace>script-file</userreplace></switch></optional>
+  <optional><switch name="group"><userreplace>group-regex</userreplace></switch></optional>
+  <optional><switch name="test"><userreplace>test-regex</userreplace></switch></optional>
+  <optional><switch name="show-command"/></optional>
+  <optional><switch name="show-output"/></optional>
+  <optional><switch name="show-diff"/></optional>
+  <optional><switch name="diff-context"><userreplace>lines</userreplace></switch></optional>
+  <optional><switch name="save-output"><userreplace>directory</userreplace></switch></optional>
+  <optional><switch name="junitxml"><userreplace>file</userreplace></switch></optional>
+  <optional><switch name="debug"><userreplace>type-list</userreplace></switch></optional>
+  <userreplace>tool-under-test</userreplace>
+  <userreplace>test-directory</userreplace>
+</syntax>
+<syntax>
+  <optional><switch name="diff-context"><userreplace>lines</userreplace></switch></optional>
+  <switch name="diff-files"/>
+  <userreplace>expected-file</userreplace>
+  <userreplace>actual-file</userreplace>
+</syntax>
+<parameter switch="verbose" switch-alias="v">Show per-test progress output. This is the default behaviour.</parameter>
+<parameter switch="quiet" switch-alias="q">Suppress per-test progress output and show only the summary.</parameter>
+<parameter switch="script">Read a different test script file instead of the default <filename type="unix">tests.txt</filename>.</parameter>
+<parameter switch="group">Run only groups whose names match the supplied regular expression.</parameter>
+<parameter switch="test">Run only tests whose names match the supplied regular expression.</parameter>
+<parameter switch="show-command">Print the expanded command for each test before it is run.</parameter>
+<parameter switch="show-output">Print captured output when a test fails.</parameter>
+<parameter switch="show-diff">Print the line-oriented diff between actual and expected output on failure.</parameter>
+<parameter switch="diff-context">Retain the given number of unchanged lines around each changed region in displayed diffs. The value must be a non-negative integer. If this option is omitted, all unchanged lines are retained.</parameter>
+<parameter switch="diff-files">Compare two files with the runner's built-in line-oriented diff display, then exit without running a test suite.</parameter>
+<parameter switch="save-output">Save captured output from every test into the named directory.</parameter>
+<parameter switch="junitxml">Write a JUnit XML report to the named file.</parameter>
+<parameter switch="debug">Enable internal debug output. The runner accepts the comma-separated names <userinput>filename</userinput>, <userinput>replace</userinput>, <userinput>aof</userinput>, <userinput>junitxml</userinput>, or <userinput>all</userinput>.</parameter>
+<parameter name="tool-under-test">Path to the executable or script that the suite will run. Inside the test script it is available through the substitution variable <userinput>$TOOL</userinput>. Tests run with the working directory set to <userinput>test-directory</userinput>, not the directory <userinput>riscos-tooltester</userinput> was started from, so a relative path such as a bare leafname or <userinput>./mytool</userinput> will not resolve unless the tool also happens to live under the test directory; give an absolute path, or a path already resolvable through the <userinput>PATH</userinput> environment variable, for a tool that lives elsewhere.</parameter>
+<parameter name="test-directory">Directory containing the main test script, expectation files, replacement scripts, and any test data.</parameter>
+<parameter name="expected-file">Expected content for a standalone <userinput>-diff-files</userinput> comparison.</parameter>
+<parameter name="actual-file">Actual content for a standalone <userinput>-diff-files</userinput> comparison.</parameter>
+<use>
+<p><userinput>riscos-tooltester</userinput> runs a command-line tool repeatedly according to a plain text test description, captures output, checks return codes, and can validate files or directories created by the tool.</p>
+<p>The normal calling convention is to place any switches first, then pass the tool under test and the directory containing the suite. By default the runner reads <filename type="unix">tests.txt</filename> from that directory. The script format is designed for repository-local maintenance: it is simple to diff, easy to split with <userinput>Include:</userinput>, and keeps expected output in ordinary text files.</p>
+<p>Tests are arranged into <userinput>Group:</userinput> blocks and <userinput>Test:</userinput> entries. A group establishes default statements such as <userinput>Command:</userinput>, <userinput>Replace:</userinput>, or <userinput>Env:</userinput>; each following test inherits those values and may override them or clear them with a leading minus form such as <userinput>-Expect:</userinput>.</p>
+<p>Captured output is compared against the file named by <userinput>Expect:</userinput> after any optional replacement script named by <userinput>Replace:</userinput> has normalised unstable data such as paths, timestamps, branch names, or memory addresses. When output mismatches, the runner writes the post-replacement actual output to the expectation pathname with <filename type="unix">-actual</filename> appended, which makes it easy to inspect the real result before updating the expected file.</p>
+<p>The tool also checks side effects. <userinput>Creates:</userinput> and <userinput>CreatesDir:</userinput> assert that files or directories were created, <userinput>Removes:</userinput> and <userinput>Absent:</userinput> assert that paths are absent after the run, and built-in checker families such as <userinput>text</userinput>, <userinput>binary</userinput>, <userinput>aof</userinput>, <userinput>alf</userinput>, and <userinput>elf</userinput> can validate the created file content or structure.</p>
+<p>Use <userinput>-group</userinput> and <userinput>-test</userinput> for narrow reruns while debugging. Add <userinput>-show-command</userinput>, <userinput>-show-output</userinput>, or <userinput>-show-diff</userinput> when you need more diagnostics. The <userinput>-diff-context</userinput> option restricts displayed diffs to the selected number of unchanged lines around each change; by default all unchanged lines are shown. Use <userinput>-junitxml</userinput> when integrating the results with CI reporting.</p>
+<p>The standalone <userinput>-diff-files</userinput> form compares an expected file with an actual file using the same display as a failed test, without loading <filename type="unix">tests.txt</filename> or running a tool. Both the single-hyphen and double-hyphen spellings are accepted for these long options.</p>
+</use>
+<example>
+<command>riscos-tooltester mytool tests</command>
+</example>
+<example>
+<command>riscos-tooltester -group "Basic" -test "Help" -show-diff mytool tests</command>
+</example>
+<example>
+<command>riscos-tooltester -diff-context 3 --diff-files expected.txt actual.txt</command>
+</example>
+</command-definition>
+</section>
+
+<section title="File format overview">
+<p>
+This chapter describes the plain text file formats used by
+<userinput>riscos-tooltester</userinput>. The runner is intentionally simple: test
+suites are line-oriented text files, expectations are ordinary text files, and
+optional replacement scripts normalise unstable output before comparison.
+</p>
+</section>
+
+<section title="Suite format and statement reference">
+<subsection title="Suite layout and defaults">
+<p>
+The normal suite entry point is a file named
+<filename type="unix">tests.txt</filename> in the chosen test directory, though
+the runner can be pointed at a different file with
+<userinput>-script</userinput>. A suite directory commonly contains:
+</p>
+
+<p>
+<list type="unordered">
+<item><p>one main script file, usually <filename type="unix">tests.txt</filename>;</p></item>
+<item><p>expected output files, often under <filename type="unix">expect/</filename>;</p></item>
+<item><p>replacement scripts used to normalise unstable output before comparison; and</p></item>
+<item><p>optional input data files, often under <filename type="unix">testdata/</filename>.</p></item>
+</list>
+</p>
+
+<p>
+The script is read line by line. Blank lines and lines beginning with
+<userinput>#</userinput> are ignored.
+</p>
+</subsection>
+
+<subsection title="Statement syntax">
+<p>
+Each statement has one of these forms:
+</p>
+
+<p>
+<extended-example type="format">
+<userinput>Keyword: value</userinput><br/>
+<userinput>Checker:parameter: value</userinput><br/>
+<userinput>-Keyword:</userinput><br/>
+<userinput>-Checker:parameter:</userinput>
+</extended-example>
+</p>
+
+<p>
+The two structural statements are:
+</p>
+
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="Group: &lt;name&gt;">Begin a group. The group establishes default statements inherited by later tests in that group.</definition>
+ <definition name="Test: &lt;name&gt;">Begin one individual test. It starts as a copy of the current group settings, then any following statements override or clear those inherited values.</definition>
+</definition-table>
+</p>
+
+<p>
+To clear an inherited value from the current group, write the same keyword with
+a leading minus and no value, such as <userinput>-Expect:</userinput> or
+<userinput>-Creates:</userinput>.
+</p>
+</subsection>
+
+<subsection title="Core suite commands">
+<p>
+The runner accepts the following built-in suite statements:
+</p>
+
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="Include: &lt;file&gt;">Read another suite file inline at that point. This is commonly used to split a large suite into smaller files.</definition>
+ <definition name="Suite: &lt;name&gt;">Set the suite name used in JUnit XML output. If omitted, the runner infers a name from the script filename where possible.</definition>
+ <definition name="Command: &lt;command&gt;">Command line to execute for the test. The command may contain substitution variables such as <userinput>$TOOL</userinput>, <userinput>$FILE</userinput>, or <userinput>$ARGS</userinput>.</definition>
+ <definition name="Capture: stdout|stderr|both">Select which output stream is captured for comparison. The default is <userinput>both</userinput>.</definition>
+ <definition name="File: &lt;path&gt;">Source file value, available to substitutions as <userinput>$FILE</userinput> and <userinput>$BASE</userinput>.</definition>
+ <definition name="Args: &lt;arguments&gt;">Arbitrary argument string, available as <userinput>$ARGS</userinput> and tokenised into <userinput>$ARG1</userinput>, <userinput>$ARG2</userinput>, and so on.</definition>
+ <definition name="Expect: &lt;file&gt;">Expectation file containing the expected captured output.</definition>
+ <definition name="Replace: &lt;file&gt;">Replacement script applied to captured output before comparison.</definition>
+ <definition name="Creates: &lt;file...&gt;">One or more files that must be created by the command. The runner removes any pre-existing paths before the test and removes successful outputs afterwards.</definition>
+ <definition name="CreatesDir: &lt;dir...&gt;">One or more directories that must be created by the command. These are also removed before and after the test.</definition>
+ <definition name="Length: &lt;n&gt;">Expected file length in bytes for files named by <userinput>Creates:</userinput>. When more than one created file is named, they must all match this size.</definition>
+ <definition name="Removes: &lt;file&gt;">File that the command is expected to delete. The runner creates an empty placeholder before the test so that removal can be checked.</definition>
+ <definition name="Absent: &lt;file&gt;">File that must not exist after the command completes.</definition>
+ <definition name="RC: &lt;n&gt;">Expected return code. The default is 0.</definition>
+ <definition name="Input: &lt;file&gt;">File whose contents are supplied on standard input.</definition>
+ <definition name="InputLine: &lt;text&gt;">One line of text supplied on standard input, with a trailing newline appended by the runner.</definition>
+ <definition name="Env: &lt;VAR&gt;=&lt;value&gt;">Environment variable set only for this test execution. This statement may be repeated.</definition>
+ <definition name="Disable: &lt;reason&gt;">Disable the current group or test, recording the given reason in the reported skip result.</definition>
+</definition-table>
+</p>
+</subsection>
+
+<subsection title="Substitution variables">
+<p>
+Most statement values may contain substitution variables. The runner expands
+the following names:
+</p>
+
+<p>
+<definition-table head-name="Variable" head-value="Meaning">
+ <definition name="$TOOL">Tool path supplied on the <userinput>riscos-tooltester</userinput> command line.</definition>
+ <definition name="$FILE">Value supplied by the current <userinput>File:</userinput> statement.</definition>
+ <definition name="$OFILE">Object-file path derived from <userinput>$FILE</userinput> using RISC OS build-directory conventions.</definition>
+ <definition name="$SFILE">Assembler-file path derived from <userinput>$FILE</userinput>.</definition>
+ <definition name="$CFILE">C-file path derived from <userinput>$FILE</userinput>.</definition>
+ <definition name="$BASE">Leaf filename derived from <userinput>$FILE</userinput>.</definition>
+ <definition name="$ARGS">Full argument string from <userinput>Args:</userinput>.</definition>
+ <definition name="$ARG1 ... $ARG9">Whitespace-tokenised arguments derived from <userinput>Args:</userinput>. Missing values expand to an empty string.</definition>
+</definition-table>
+</p>
+
+<p>
+Quoted argument text in <userinput>Args:</userinput> is preserved when the
+numbered <userinput>$ARGn</userinput> variables are extracted, so embedded
+spaces can still be treated as one argument.
+</p>
+
+<!-- Variable population and substitution behaviour confirmed directly
+     against the variable-setup and substitution code in the installed
+     riscos-tooltester script. -->
+<p>
+Only <userinput>$ARG1</userinput> through <userinput>$ARG9</userinput> are
+ever defined; a tenth or later argument is simply not made available through
+a numbered variable. Writing
+<userinput>$ARG10</userinput> in a command does not fall back to
+<userinput>$ARG1</userinput> followed by a literal <userinput>0</userinput>:
+the substitution logic greedily matches as many digits as possible when
+looking for a variable name, so it treats the whole of
+<userinput>ARG10</userinput> as the candidate name, finds no such variable,
+and leaves <userinput>$ARG10</userinput> in the command unsubstituted. A test
+needing a tenth or later argument should pass it through
+<userinput>$ARGS</userinput> instead and split it within the tested command.
+</p>
+</subsection>
+
+<subsection title="Checker commands">
+<p>
+Checker statements use the form
+<userinput>&lt;checker&gt;:&lt;parameter&gt;: &lt;value&gt;</userinput>. They attach
+extra validation rules to the current group or test and are typically used with
+one file named by <userinput>Creates:</userinput>. The runner currently
+supports the following checker families:
+</p>
+
+<subsubsection title="AOF checker">
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="aof:totalareasize: &lt;size&gt;">Require the sum of all AOF area sizes to match the given value.</definition>
+</definition-table>
+</p>
+</subsubsection>
+
+<subsubsection title="ALF checker">
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="alf:files: &lt;count&gt;">Require the library to contain the given number of files.</definition>
+</definition-table>
+</p>
+</subsubsection>
+
+<subsubsection title="ELF checker">
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="elf:endianness: little|big">Expected ELF endianness.</definition>
+ <definition name="elf:entry: &lt;address&gt;">Expected entry address.</definition>
+<!-- Numeric-comparison behaviour confirmed against the elf_check function in
+     the installed script. -->
+ <definition name="elf:type: &lt;type&gt;">Expected ELF object type, checked as a plain numeric comparison against the file's e_type field with no restriction to particular values. The installed script's own comments only mention 1 (relocatable) and 2 (executable), but the standard ELF enumeration's other small values also work: 3 for a shared object and 4 for a core file.</definition>
+ <definition name="elf:osabi: &lt;value&gt;">Expected OS/ABI value.</definition>
+ <definition name="elf:phoff: &lt;offset&gt;">Expected program-header table offset.</definition>
+ <definition name="elf:shoff: &lt;offset&gt;">Expected section-header table offset.</definition>
+ <definition name="elf:ehsize: &lt;size&gt;">Expected ELF header size.</definition>
+ <definition name="elf:flags: &lt;flags&gt;">Expected ELF flags field.</definition>
+ <definition name="elf:phentsize: &lt;size&gt;">Expected size of each program-header entry.</definition>
+ <definition name="elf:phnum: &lt;count&gt;">Expected number of program-header entries.</definition>
+ <definition name="elf:shentsize: &lt;size&gt;">Expected size of each section-header entry.</definition>
+ <definition name="elf:shnum: &lt;count&gt;">Expected number of section-header entries.</definition>
+ <definition name="elf:shstrndx: &lt;index&gt;">Expected section-name string-table index.</definition>
+</definition-table>
+</p>
+</subsubsection>
+
+<subsubsection title="Text checker">
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="text:matches: &lt;file&gt;">Compare the created file's textual content against the named file.</definition>
+ <definition name="text:replace: &lt;file&gt;">Apply a replacement script before the textual comparison.</definition>
+</definition-table>
+</p>
+</subsubsection>
+
+<subsubsection title="Binary checker">
+<p>
+<definition-table head-name="Statement" head-value="Meaning">
+ <definition name="binary:matches: &lt;file&gt;">Compare the created file byte-for-byte against the named file.</definition>
+ <definition name="binary:checkfile: &lt;file&gt;">Validate specific offsets described by a separate checkfile.</definition>
+ <definition name="binary:replace: &lt;file&gt;">Apply a replacement script before comparing the binary file rendered as text.</definition>
+</definition-table>
+</p>
+
+<p>
+The installed script comments describe the checkfile syntax as:
+</p>
+
+<p>
+<extended-example type="format">
+<userinput>&lt;offset&gt; [word|byte|string]: &lt;value&gt;</userinput>
+</extended-example>
+</p>
+</subsubsection>
+
+<p>
+The installed runner does not permit checker use with more than one created
+file in the same test. If you need checker validation for multiple outputs,
+split them into separate tests.
+</p>
+</subsection>
+
+<subsection title="Replacement script language">
+<p>
+Replacement scripts are miniature line-processing programs. They transform the
+captured output into a stable form before it is compared against the expectation
+file, which is useful when the tool prints variable data such as absolute
+paths, timestamps, branch names, or memory addresses.
+</p>
+
+<p>
+The replacement file is read line by line:
+</p>
+
+<p>
+<list type="unordered">
+<item><p>blank lines and comment lines beginning with <userinput>#</userinput> are ignored;</p></item>
+<item><p>directive lines begin with <userinput>%</userinput>;</p></item>
+<item><p>all other lines are rules made of zero or more conditions followed by one action.</p></item>
+</list>
+</p>
+
+<subsubsection title="Directives">
+<p>
+The installed runner supports one directive:
+</p>
+
+<p>
+<definition-table head-name="Directive" head-value="Meaning">
+ <definition name="%include &lt;file&gt;">Read another replacement file inline. Paths are resolved relative to the current replacement file.</definition>
+</definition-table>
+</p>
+</subsubsection>
+
+<subsubsection title="Conditions">
+<p>
+Rules may be restricted by line number, by regular-expression match, or by
+both together.
+</p>
+
+<p>
+<definition-table head-name="Condition form" head-value="Meaning">
+ <definition name="5">Apply only to line 5.</definition>
+ <definition name="-5">Apply only to lines 1 through 5.</definition>
+ <definition name="3-10">Apply only to lines 3 through 10.</definition>
+ <definition name="10-">Apply only to line 10 onwards.</definition>
+ <definition name="/pattern/">Apply only when the line matches the regular expression.</definition>
+ <definition name="/pattern/ !">Negated regular-expression condition: apply only when the line does not match.</definition>
+</definition-table>
+</p>
+
+<p>
+The installed script also accepts negation on the numeric range condition by
+adding <userinput>!</userinput> immediately after it. When both a range and a
+regular-expression condition are present, both must match for the action to
+run.
+</p>
+</subsubsection>
+
+<subsubsection title="Actions">
+<p>
+The supported actions are:
+</p>
+
+<p>
+<definition-table head-name="Action" head-value="Meaning">
+ <definition name="s/from/to/">Replace the first regular-expression match on the line.</definition>
+ <definition name="s/from/to/g">Replace all matches on the line.</definition>
+ <definition name="s/from/to/i">Case-insensitive single substitution.</definition>
+ <definition name="s/from/to/gi">Case-insensitive global substitution.</definition>
+ <definition name="p">Write the line to the output immediately and continue with the next input line.</definition>
+ <definition name="d">Delete the line from the output.</definition>
+ <definition name="q">Stop processing and end the output before the current line.</definition>
+</definition-table>
+</p>
+
+<p>
+If no rule takes an early action and the end of the rule list is reached, the
+current line is written to the output unchanged.
+</p>
+</subsubsection>
+
+<subsubsection title="Replacement example">
+<p>
+This example removes transient progress messages, normalises a test-data path,
+and rewrites hexadecimal addresses:
+</p>
+
+<p>
+<extended-example type="format">
+<userinput>/^Processing:/ d</userinput><br/>
+<userinput>s!/[^ ]+/testdata!TESTDATA!g</userinput><br/>
+<userinput>s/0x[0-9a-f]{8}/0xXXXXXXXX/gi</userinput>
+</extended-example>
+</p>
+</subsubsection>
+</subsection>
+
+<subsection title="Worked suite example">
+<p>
+A compact suite for command help and version output can be written like this:
+</p>
+
+<p>
+<extended-example type="format">
+<userinput>Group: Core behaviour</userinput><br/>
+<userinput>Command: $TOOL $ARGS</userinput><br/>
+<userinput>Replace: expect/shared_replacements</userinput><br/>
+<br/>
+<userinput>Test: Help text</userinput><br/>
+<userinput>Args: --help</userinput><br/>
+<userinput>Expect: expect/help</userinput><br/>
+<br/>
+<userinput>Test: Version text</userinput><br/>
+<userinput>Args: --version</userinput><br/>
+<userinput>Expect: expect/version</userinput><br/>
+<br/>
+<userinput>Test: Writes report</userinput><br/>
+<userinput>Args: --report out.txt</userinput><br/>
+<userinput>Creates: out.txt</userinput><br/>
+<userinput>text:matches: expect/report</userinput>
+</extended-example>
+</p>
+
+<p>
+That pattern keeps the command line and shared replacements at group level,
+leaving each test to describe only the inputs and checks that differ.
+</p>
+</subsection>
+</section>
+ </chapter>
+
+<meta>
+ <maintainer>
+  <email name="Charles Ferguson" address="gerph@gerph.org" />
+ </maintainer>
+ <disclaimer>
+  <p>&copy; Charles Ferguson, 2026.</p>
+ </disclaimer>
+ <history>
+  <revision number="1" author="Gerph" date="17 Jun 2026" title="Initial version">
+   <change>Added a file-format appendix for riscos-tooltester suites, checker statements, and replacement scripts.</change>
+  </revision>
+  <revision number="2" author="Gerph" date="19 Jun 2026" title="Revised appendix structure">
+   <change>Updated the appendix section structure to use appendix-specific headings rather than the main chapter template.</change>
+  </revision>
+  <revision number="3" author="Gerph" date="23 Jun 2026" title="Stated behaviour past $ARG9 and the full ELF type enumeration">
+<!-- Verified against the variable-setup, substitution, and elf_check code
+        in the installed riscos-tooltester script. -->
+   <change>DOC-099: confirmed only ARG1-ARG9 are ever populated, and that $ARG10 is left unsubstituted in the command rather than split into $ARG1 followed by a literal 0. Documented both findings and recommended using $ARGS directly for a tenth or later argument. DOC-100: confirmed elf:type is a plain numeric comparison against e_type with no restriction to the values the script's comments happen to mention; added the standard ELF enumeration's remaining small values, 3 (shared object) and 4 (core file).</change>
+  </revision>
+   <revision number="4" author="Gerph" date="16 Oct 2026" title="Standalone document">
+   <change>Combined the command reference and the file format into a single document, published with the tool.</change>
+  </revision>
+ </history>
+</meta>
+</riscos-prm>
