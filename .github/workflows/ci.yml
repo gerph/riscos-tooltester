@@ -1,0 +1,100 @@
+---
+# Check the tool, build the documentation, and publish a release for a v* tag.
+
+name: CI
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["v*"]
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: ["*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # ci-vars counts the commits, so it needs the complete history.
+          fetch-depth: 0
+
+      - name: Calculate the version
+        id: version
+        run: |
+          eval "$(./ci-vars)"
+          echo "Version: $CI_PROJECT_VERSION"
+          echo "version=$CI_PROJECT_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check the script compiles
+        run: perl -c tooltester.pl
+
+      - name: Check the diff display
+        run: |
+          printf 'one\ntwo\n' > /tmp/expected
+          printf 'one\ntwo\n' > /tmp/same
+          printf 'one\n2\n' > /tmp/different
+          perl tooltester.pl --diff-files /tmp/expected /tmp/same
+          if perl tooltester.pl --diff-files /tmp/expected /tmp/different ; then
+              echo "Differing files were reported as identical" >&2
+              exit 1
+          fi
+
+      - name: Build the documentation
+        uses: gerph/riscos-prminxml-action@v1
+        with:
+          files: prminxml/tooltester.xml
+          output: site
+          style: prm
+          css-variant: large-bullets
+
+      - name: Package the release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist/package
+          cp tooltester.pl dist/riscos-tooltester
+          chmod +x dist/riscos-tooltester
+          cp dist/riscos-tooltester README.md LICENSE dist/package/
+          (cd dist/package && zip -9r "../riscos-tooltester-$VERSION.zip" .)
+          cp site/tooltester.html site/index.html
+          (cd site && zip -9r "../dist/riscos-tooltester-docs-$VERSION.zip" .)
+          rm -rf dist/package
+          ls -l dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Release
+          path: dist
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Check that the tag is the version
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_NAME" != "v$VERSION" ] ; then
+              echo "Tag $GITHUB_REF_NAME does not match the version v$VERSION of this commit" >&2
+              exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: Release
+          path: dist
+
+      - name: Create Release
+        uses: ncipollo/release-action@v1
+        with:
+          prerelease: false
+          draft: false
+          artifacts: "dist/*"

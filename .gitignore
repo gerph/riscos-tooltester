@@ -1,3 +1,5 @@
 artifacts/
 ci-logs/
 riscos-build/
+dist/
+site/
