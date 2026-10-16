@@ -9,14 +9,15 @@ result with what the suite expects, and reports what passed, failed or crashed.
 
 It is intended for integration testing of how a tool behaves as a user sees it,
 rather than unit testing. It is a single Perl script with no dependencies, and
-it can write JUnit XML so that results can be shown by CI systems.
+it can write JUnit XML so that results can be shown by CI systems. It runs on
+Linux and macOS, and under RISC OS itself, where the same suites can be used.
 
 ## Installing
 
 Each [release](https://github.com/gerph/riscos-tooltester/releases) provides:
 
 * `riscos-tooltester` - the script itself. Download it, make it executable, and put it on your `PATH`.
-* `riscos-tooltester-<version>.zip` - the script, with this README and the licence.
+* `riscos-tooltester-<version>.zip` - the script and a `!Run` file for starting it on RISC OS, with this README and the licence.
 * `riscos-tooltester-docs-<version>.zip` - the documentation as HTML.
 
 For example, to fetch a specific release in a CI job:
@@ -26,6 +27,16 @@ For example, to fetch a specific release in a CI job:
     chmod +x riscos-tooltester
 
 The script needs Perl 5. It can also be run directly from a checkout as `perl tooltester.pl`.
+
+On RISC OS, unpack the zip, and run the script with the RISC OS Perl, where its
+name is `tooltester/pl`. `!Run` does this:
+
+    perl <Obey$Dir>.tooltester/pl <options> <tool-under-test> <test-directory>
+
+On RISC OS the script file is named as `tests/txt` and expectation files may use
+RISC OS names, so the same suites can be run on either system if they are
+written with this in mind. The script must remain compatible with the Perl 5.001
+interpreter, so avoid newer Perl features when changing it.
 
 ## Using it
 

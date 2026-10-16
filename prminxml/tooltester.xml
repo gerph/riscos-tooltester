@@ -22,6 +22,16 @@ which has no dependencies beyond Perl. It is installed under the name
 </p>
 
 <p>
+The runner also works on RISC OS, where it is run by the RISC OS Perl as
+<userinput>perl tooltester/pl</userinput>. The same test scripts can be used on
+both systems, provided that the names of the files and the commands they run are
+suitable for each. On RISC OS the test script is named as
+<filename>tests/txt</filename>, and the <userinput>capture</userinput> mode must
+be <userinput>both</userinput>, because RISC OS has no separate error stream to
+capture.
+</p>
+
+<p>
 This document describes the command line, and then the format of the files that
 make up a suite. The suite is described in a test script, normally
 <filename type="unix">tests.txt</filename>, which refers to files of expected

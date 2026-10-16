@@ -59,7 +59,8 @@ jobs:
           mkdir -p dist/package
           cp tooltester.pl dist/riscos-tooltester
           chmod +x dist/riscos-tooltester
-          cp dist/riscos-tooltester README.md LICENSE dist/package/
+          # The RISC OS layout, where tooltester.pl is the file tooltester/pl
+          cp tooltester.pl '!Run,feb' README.md LICENSE dist/package/
           (cd dist/package && zip -9r "../riscos-tooltester-$VERSION.zip" .)
           cp site/tooltester.html site/index.html
           (cd site && zip -9r "../dist/riscos-tooltester-docs-$VERSION.zip" .)
